@@ -14,6 +14,12 @@ router.post('/', createArtifactValidation, async (req, res) => {
   res.status(result.statusCode || 201).json(result)
 })
 
+// 获取 Artifact 列表
+router.get('/', async (req, res) => {
+  const result = await artifactService.listArtifacts(req.user.id)
+  res.json(result)
+})
+
 // 渲染Artifact
 router.get('/:artifactId/render', async (req, res) => {
   const result = await artifactService.renderArtifact(req.params.artifactId, req.user.id)

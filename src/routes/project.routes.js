@@ -16,6 +16,12 @@ const upload = multer({
 
 router.use(authenticate)
 
+// 获取项目列表
+router.get('/', async (req, res) => {
+  const result = await projectService.getList(req.user.id)
+  res.json(result)
+})
+
 // 创建项目
 router.post('/', createProjectValidation, async (req, res) => {
   const result = await projectService.createProject(

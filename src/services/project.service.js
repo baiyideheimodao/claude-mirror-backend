@@ -17,6 +17,17 @@ class ProjectService {
   }
 
   /**
+   * 获取用户项目列表
+   */
+  async getList(userId) {
+    const [rows] = await pool.execute(
+      'SELECT * FROM projects WHERE user_id = ? ORDER BY updated_at DESC',
+      [userId]
+    )
+    return successResponse(rows)
+  }
+
+  /**
    * 上传知识库文件
    */
   async uploadKnowledgeBase(projectId, userId, fileId) {

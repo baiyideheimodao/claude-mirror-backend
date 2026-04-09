@@ -21,6 +21,17 @@ class ArtifactService {
   }
 
   /**
+   * 查询用户的 Artifact 列表
+   */
+  async listArtifacts(userId) {
+    const [rows] = await pool.execute(
+      'SELECT * FROM artifacts WHERE user_id = ? ORDER BY created_at DESC',
+      [userId]
+    )
+    return successResponse(rows)
+  }
+
+  /**
    * 渲染Artifact
    */
   async renderArtifact(artifactId, userId) {
