@@ -43,7 +43,7 @@ router.delete('/:dialogId', dialogIdParam, async (req, res) => {
 // 发送消息
 router.post('/:dialogId/messages', dialogIdParam, sendMessageValidation, async (req, res) => {
   const result = await dialogService.sendMessage(
-    req.params.dialogId, req.user.id, req.body.content, req.body.files
+    req.params.dialogId, req.user.id, req.body.content, req.body.files, req.body.artifact_type
   )
   res.status(result.statusCode || 200).json(result)
 })
