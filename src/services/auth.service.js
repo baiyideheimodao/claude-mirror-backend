@@ -2,7 +2,8 @@ const bcrypt = require('bcryptjs')
 const jwt = require('jsonwebtoken')
 const { pool } = require('../config/database')
 const { generateId, successResponse, errorResponse } = require('../utils/helpers')
-require('dotenv').config()
+const path = require('path')
+require('dotenv').config({ path: path.resolve(__dirname, '../../.env') })
 
 class AuthService {
   /**
@@ -34,11 +35,12 @@ class AuthService {
    * 用户登录
    */
   async login(username, password) {
+    // 支持用户名或邮箱登录
     const [rows] = await pool.execute(
-      'SELECT * FROM users WHERE username = ?',
-      [username]
+      'SELECT * FROM users WHERE username = ? OR email = ?',
+      [username, username]
     )
-    if (rows.length === 0) return errorResponse('用户名或密码错误', 401)
+    if (rows.length === 0) return errorResponse('用户名/邮箱或密码错误', 401)
 
     const user = rows[0]
     if (!user.is_active) return errorResponse('账号已被禁用', 403)

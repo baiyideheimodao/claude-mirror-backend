@@ -1,5 +1,8 @@
 const { pool } = require('../config/database')
 const { generateId, groupDialogsByDate, successResponse, errorResponse } = require('../utils/helpers')
+const aiService = require('./ai.service')
+
+const AI_SYSTEM_PROMPT = '你是 Claude，一个由 Anthropic 开发的 AI 助手。你善于分析问题、提供详细解答，并始终以友好、专业的方式与用户交流。'
 
 class DialogService {
   /**
@@ -86,9 +89,31 @@ class DialogService {
       [dialogId]
     )
 
-    // TODO: 调用AI模型生成回复，此处模拟AI回复
+    // 获取对话历史用于上下文
+    const [history] = await pool.execute(
+      'SELECT role, content FROM dialog_messages WHERE dialog_id = ? ORDER BY timestamp ASC',
+      [dialogId]
+    )
+
+    // 构建消息列表（限制最近 20 条避免 token 过多）
+    const recentHistory = history.slice(-20)
+    const chatMessages = recentHistory.map(m => ({
+      role: m.role === 'ai' ? 'assistant' : 'user',
+      content: m.content
+    }))
+
+    // 调用 AI 生成回复
+    let aiContent
+    try {
+      aiContent = await aiService.chat(chatMessages, {
+        system: AI_SYSTEM_PROMPT,
+        max_tokens: 4096
+      })
+    } catch (e) {
+      aiContent = `抱歉，AI 回复生成失败：${e.message}，请稍后重试。`
+    }
+
     const aiMsgId = generateId()
-    const aiContent = '这是AI的模拟回复。实际部署时将调用Claude API。'
     await pool.execute(
       `INSERT INTO dialog_messages (id, dialog_id, user_id, content, role, parent_id)
        VALUES (?, ?, ?, ?, "ai", ?)`,
@@ -123,9 +148,43 @@ class DialogService {
     )
     if (!msg) return errorResponse('消息不存在', 404)
 
+    // 获取对话历史（到此消息为止）
+    const [history] = await pool.execute(
+      'SELECT role, content FROM dialog_messages WHERE dialog_id = ? AND timestamp < ? ORDER BY timestamp ASC',
+      [dialogId, msg.timestamp]
+    )
+
+    const recentHistory = history.slice(-20)
+    const chatMessages = recentHistory.map(m => ({
+      role: m.role === 'ai' ? 'assistant' : 'user',
+      content: m.content
+    }))
+
+    // 如果原始消息是 AI 的，且有其 parent_id 对应的用户消息，追加到上下文
+    if (msg.role === 'ai' && msg.parent_id) {
+      const [[parentMsg]] = await pool.execute(
+        'SELECT content FROM dialog_messages WHERE id = ?',
+        [msg.parent_id]
+      )
+      if (parentMsg) {
+        chatMessages.push({ role: 'user', content: parentMsg.content })
+      }
+    }
+
+    // 调用 AI 重新生成
+    let aiContent
+    try {
+      aiContent = await aiService.chat(chatMessages, {
+        system: AI_SYSTEM_PROMPT,
+        max_tokens: 4096,
+        temperature: 0.8 // 重新生成时温度稍高以获得不同回复
+      })
+    } catch (e) {
+      aiContent = `抱歉，AI 回复重新生成失败：${e.message}，请稍后重试。`
+    }
+
     const newVersion = msg.version + 1
     const newMsgId = generateId()
-    const aiContent = '这是重新生成的AI回复。'
 
     await pool.execute(
       `INSERT INTO dialog_messages (id, dialog_id, user_id, content, role, parent_id, version)

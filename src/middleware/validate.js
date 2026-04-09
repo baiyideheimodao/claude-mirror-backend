@@ -24,7 +24,7 @@ const registerValidation = [
 ]
 
 const loginValidation = [
-  body('username').notEmpty().withMessage('请输入用户名'),
+  body('username').notEmpty().withMessage('请输入用户名或邮箱'),
   body('password').notEmpty().withMessage('请输入密码'),
   handleValidationErrors
 ]
