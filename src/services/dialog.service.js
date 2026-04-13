@@ -419,6 +419,88 @@ class DialogService {
   }
 
   /**
+   * 发送消息（流式）
+   * @returns {AsyncGenerator} 逐块 yield { type: 'chunk'|'done'|'error', text?, id?, message? }
+   */
+  async *sendMessageStream(dialogId, userId, content, files = [], artifactType = null) {
+    console.log('[SERVICE] sendMessageStream ENTER, dialogId:', dialogId, 'userId:', userId)
+    console.log('[SERVICE] content:', (content || '').substring(0, 100))
+
+    // 保存用户消息
+    const userMsgId = generateId()
+    await pool.execute(
+      'INSERT INTO dialog_messages (id, dialog_id, user_id, content, role, status) VALUES (?, ?, ?, ?, "user", "sent")',
+      [userMsgId, dialogId, userId, content]
+    )
+    console.log('[SERVICE] userMsg saved:', userMsgId)
+
+    await pool.execute(
+      'UPDATE dialogs SET last_message_at = NOW(), updated_at = NOW() WHERE id = ?',
+      [dialogId]
+    )
+
+    // 获取对话历史
+    const [history] = await pool.execute(
+      'SELECT role, content FROM dialog_messages WHERE dialog_id = ? ORDER BY timestamp ASC',
+      [dialogId]
+    )
+    const recentHistory = history.slice(-20)
+    const chatMessages = recentHistory.map(m => ({
+      role: m.role === 'ai' ? 'assistant' : 'user',
+      content: m.content
+    }))
+    console.log('[SERVICE] history loaded, messages count:', chatMessages.length)
+
+    // 选择系统提示词
+    let systemPrompt = AI_SYSTEM_PROMPT
+    if (artifactType && ARTIFACT_SYSTEM_PROMPTS[artifactType]) {
+      systemPrompt = ARTIFACT_SYSTEM_PROMPTS[artifactType]
+    } else if (artifactType) {
+      systemPrompt = ARTIFACT_SYSTEM_PROMPTS.default
+    }
+    console.log('[SERVICE] system prompt length:', systemPrompt.length)
+
+    // 流式调用 AI
+    let fullContent = ''
+    try {
+      console.log('[SERVICE] calling aiService.chatStream...')
+      const stream = aiService.chatStream(chatMessages, {
+        system: systemPrompt,
+        max_tokens: 4096
+      })
+
+      let aiChunkCount = 0
+      for await (const delta of stream) {
+        if (!delta) continue
+        aiChunkCount++
+        fullContent += delta
+        console.log(`[SERVICE] AI chunk #${aiChunkCount}:`, JSON.stringify(delta).substring(0, 50))
+        yield { type: 'chunk', text: delta }
+      }
+
+      console.log(`[SERVICE] AI stream complete, ${aiChunkCount} chunks, total ${fullContent.length} chars`)
+      if (!fullContent) {
+        console.warn('[SERVICE] WARNING: AI returned empty content!')
+      }
+    } catch (e) {
+      console.error('[SERVICE] AI service error:', e.message || e)
+      fullContent = `抱歉，AI 回复生成失败：${e.message}，请稍后重试。`
+      yield { type: 'chunk', text: fullContent }
+    }
+
+    // 保存完整回复到数据库
+    const aiMsgId = generateId()
+    await pool.execute(
+      `INSERT INTO dialog_messages (id, dialog_id, user_id, content, role, parent_id)
+       VALUES (?, ?, ?, ?, "ai", ?)`,
+      [aiMsgId, dialogId, userId, fullContent, userMsgId]
+    )
+    console.log('[SERVICE] aiMessage saved:', aiMsgId, 'content length:', fullContent.length)
+
+    yield { type: 'done', id: aiMsgId }
+  }
+
+  /**
    * 编辑消息
    */
   async editMessage(dialogId, messageId, userId, content) {
