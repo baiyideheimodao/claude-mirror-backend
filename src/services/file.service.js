@@ -21,8 +21,20 @@ const upload = multer({
   storage,
   limits: { fileSize: MAX_SIZE },
   fileFilter: (_req, file, cb) => {
-    const allowedTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp',
-                          'application/pdf', 'text/plain', 'application/json']
+    const allowedTypes = [
+      // 图片
+      'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/svg+xml',
+      // 文档
+      'application/pdf',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document', // .docx
+      // 纯文本 & 代码
+      'text/plain', 'text/html', 'text/css', 'text/javascript', 'text/x-python',
+      'application/json', 'application/xml', 'text/xml', 'text/markdown',
+      'text/csv', 'text/x-sql', 'text/x-java-source',
+      'text/typescript', 'application/typescript',
+      'text/x-go', 'text/x-rust', 'text/x-ruby', 'text/x-php', 'text/x-c',
+      'text/x-c++src', 'text/yaml', 'application/x-yaml', 'application/graphql',
+    ]
     if (allowedTypes.includes(file.mimetype)) {
       cb(null, true)
     } else {
