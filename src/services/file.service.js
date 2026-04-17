@@ -34,10 +34,25 @@ const upload = multer({
       'text/typescript', 'application/typescript',
       'text/x-go', 'text/x-rust', 'text/x-ruby', 'text/x-php', 'text/x-c',
       'text/x-c++src', 'text/yaml', 'application/x-yaml', 'application/graphql',
+      // 其他可能的文本类型
+      'text/x-markdown', 'application/markdown', 'application/x-markdown',
     ]
+    // 允许的扩展名列表
+    const allowedExtensions = ['.md', '.txt', '.pdf', '.docx', '.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.html', '.css', '.js', '.json', '.xml', '.csv', '.sql', '.java', '.ts', '.go', '.rs', '.rb', '.php', '.c', '.cpp', '.yaml', '.yml', '.graphql']
+    
+    const ext = path.extname(file.originalname).toLowerCase()
+    
+    // 如果MIME类型在允许列表中，直接通过
     if (allowedTypes.includes(file.mimetype)) {
       cb(null, true)
-    } else {
+    } 
+    // 如果MIME类型不被允许，但扩展名在允许列表中，也通过（针对某些浏览器误判MIME类型的情况）
+    else if (allowedExtensions.includes(ext)) {
+      console.log(`[File Filter] Allowed by extension: ${file.originalname}, MIME: ${file.mimetype}, Ext: ${ext}`)
+      cb(null, true)
+    }
+    else {
+      console.log(`[File Filter] Rejected: ${file.originalname}, MIME: ${file.mimetype}, Ext: ${ext}`)
       cb(new Error('文件类型不支持'))
     }
   }
