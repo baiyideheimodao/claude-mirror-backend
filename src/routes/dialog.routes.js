@@ -5,6 +5,7 @@ const dialogService = require('../services/dialog.service')
 const {
   createDialogValidation,
   updateDialogValidation,
+  pinDialogValidation,
   sendMessageValidation,
   editMessageValidation,
   dialogIdParam
@@ -32,6 +33,11 @@ router.get('/:dialogId', dialogIdParam, async (req, res) => {
 
 router.put('/:dialogId', dialogIdParam, updateDialogValidation, async (req, res) => {
   const result = await dialogService.renameDialog(req.params.dialogId, req.user.id, req.body.title)
+  res.status(result.statusCode || 200).json(result)
+})
+
+router.put('/:dialogId/pin', dialogIdParam, pinDialogValidation, async (req, res) => {
+  const result = await dialogService.setPinned(req.params.dialogId, req.user.id, req.body.is_pinned)
   res.status(result.statusCode || 200).json(result)
 })
 

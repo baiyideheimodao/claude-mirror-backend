@@ -28,6 +28,42 @@ class ProjectService {
   }
 
   /**
+   * 将对话加入项目
+   */
+  async addDialog(projectId, dialogId, userId) {
+    const [[project]] = await pool.execute(
+      'SELECT id FROM projects WHERE id = ? AND user_id = ?',
+      [projectId, userId]
+    )
+    if (!project) return errorResponse('项目不存在', 404)
+
+    const [[dialog]] = await pool.execute(
+      'SELECT id FROM dialogs WHERE id = ? AND user_id = ? AND is_deleted = 0',
+      [dialogId, userId]
+    )
+    if (!dialog) return errorResponse('对话不存在', 404)
+
+    const [[relation]] = await pool.execute(
+      'SELECT id FROM project_dialogs WHERE project_id = ? AND dialog_id = ?',
+      [projectId, dialogId]
+    )
+
+    if (!relation) {
+      await pool.execute(
+        'INSERT INTO project_dialogs (project_id, dialog_id) VALUES (?, ?)',
+        [projectId, dialogId]
+      )
+    }
+
+    await pool.execute(
+      'UPDATE projects SET updated_at = NOW() WHERE id = ? AND user_id = ?',
+      [projectId, userId]
+    )
+
+    return successResponse(null, relation ? '该对话已在项目中' : '已添加到项目')
+  }
+
+  /**
    * 上传知识库文件
    */
   async uploadKnowledgeBase(projectId, userId, fileId) {

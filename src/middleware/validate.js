@@ -43,7 +43,16 @@ const resetPasswordValidation = [
 // ========== 对话相关验证 ==========
 const createDialogValidation = [handleValidationErrors]
 const updateDialogValidation = [
-  body('title').notEmpty().withMessage('标题不能为空'),
+  body('title')
+    .trim()
+    .notEmpty()
+    .withMessage('标题不能为空')
+    .isLength({ max: 200 })
+    .withMessage('标题不能超过200个字符'),
+  handleValidationErrors
+]
+const pinDialogValidation = [
+  body('is_pinned').isBoolean().withMessage('收藏状态无效'),
   handleValidationErrors
 ]
 const sendMessageValidation = [
@@ -64,6 +73,10 @@ const paginationQuery = [
 // ========== UUID参数验证 ==========
 const dialogIdParam = [
   param('dialogId').isUUID().withMessage('对话ID格式无效'),
+  handleValidationErrors
+]
+const projectIdParam = [
+  param('projectId').isUUID().withMessage('项目ID格式无效'),
   handleValidationErrors
 ]
 
@@ -122,10 +135,12 @@ module.exports = {
   resetPasswordValidation,
   createDialogValidation,
   updateDialogValidation,
+  pinDialogValidation,
   sendMessageValidation,
   editMessageValidation,
   paginationQuery,
   dialogIdParam,
+  projectIdParam,
   useRedemptionCodeValidation,
   createArtifactValidation,
   generateCodeValidation,

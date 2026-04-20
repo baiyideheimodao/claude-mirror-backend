@@ -5,7 +5,7 @@ const path = require('path')
 const { v4: uuidv4 } = require('uuid')
 const { authenticate, requireAdmin } = require('../middleware/auth')
 const projectService = require('../services/project.service')
-const { createProjectValidation } = require('../middleware/validate')
+const { createProjectValidation, projectIdParam } = require('../middleware/validate')
 const fs = require('fs')
 
 const upload = multer({
@@ -28,6 +28,12 @@ router.post('/', createProjectValidation, async (req, res) => {
     req.user.id, req.body.name, req.body.description, req.body.icon
   )
   res.status(result.statusCode || 201).json(result)
+})
+
+// 将对话加入项目
+router.post('/:projectId/dialogs', projectIdParam, async (req, res) => {
+  const result = await projectService.addDialog(req.params.projectId, req.body.dialog_id, req.user.id)
+  res.status(result.statusCode || 200).json(result)
 })
 
 // 上传知识库

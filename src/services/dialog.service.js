@@ -321,11 +321,37 @@ class DialogService {
    * 重命名对话
    */
   async renameDialog(dialogId, userId, title) {
-    await pool.execute(
+    const normalizedTitle = String(title || '').trim()
+    const [result] = await pool.execute(
       'UPDATE dialogs SET title = ?, updated_at = NOW() WHERE id = ? AND user_id = ? AND is_deleted = 0',
-      [title, dialogId, userId]
+      [normalizedTitle, dialogId, userId]
     )
-    return successResponse(null, '重命名成功')
+    if (result.affectedRows === 0) return errorResponse('对话不存在', 404)
+
+    const [[dialog]] = await pool.execute(
+      'SELECT id, title, created_at, updated_at, last_message_at, is_pinned FROM dialogs WHERE id = ? AND user_id = ? AND is_deleted = 0',
+      [dialogId, userId]
+    )
+
+    return successResponse(dialog, '重命名成功')
+  }
+
+  /**
+   * 收藏/取消收藏对话
+   */
+  async setPinned(dialogId, userId, isPinned) {
+    const [result] = await pool.execute(
+      'UPDATE dialogs SET is_pinned = ?, updated_at = NOW() WHERE id = ? AND user_id = ? AND is_deleted = 0',
+      [isPinned ? 1 : 0, dialogId, userId]
+    )
+    if (result.affectedRows === 0) return errorResponse('对话不存在', 404)
+
+    const [[dialog]] = await pool.execute(
+      'SELECT id, title, created_at, updated_at, last_message_at, is_pinned FROM dialogs WHERE id = ? AND user_id = ? AND is_deleted = 0',
+      [dialogId, userId]
+    )
+
+    return successResponse(dialog, isPinned ? '已收藏' : '已取消收藏')
   }
 
   /**
