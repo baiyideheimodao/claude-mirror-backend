@@ -530,12 +530,78 @@ class DialogService {
    * 编辑消息
    */
   async editMessage(dialogId, messageId, userId, content) {
-    const [result] = await pool.execute(
-      'UPDATE dialog_messages SET content = ? WHERE id = ? AND dialog_id = ? AND user_id = ?',
-      [content, messageId, dialogId, userId]
+    const normalizedContent = String(content || '').trim()
+    const [[message]] = await pool.execute(
+      'SELECT * FROM dialog_messages WHERE id = ? AND dialog_id = ? AND user_id = ?',
+      [messageId, dialogId, userId]
     )
-    if (result.affectedRows === 0) return errorResponse('消息不存在', 404)
-    return successResponse(null, '编辑成功')
+    if (!message) return errorResponse('消息不存在', 404)
+
+    await pool.execute(
+      'UPDATE dialog_messages SET content = ? WHERE id = ? AND dialog_id = ? AND user_id = ?',
+      [normalizedContent, messageId, dialogId, userId]
+    )
+
+    if (message.role !== 'user') {
+      const [[updatedMessage]] = await pool.execute(
+        'SELECT * FROM dialog_messages WHERE id = ? AND dialog_id = ? AND user_id = ?',
+        [messageId, dialogId, userId]
+      )
+      return successResponse(updatedMessage, '编辑成功')
+    }
+
+    const [history] = await pool.execute(
+      'SELECT role, content FROM dialog_messages WHERE dialog_id = ? AND timestamp < ? ORDER BY timestamp ASC',
+      [dialogId, message.timestamp]
+    )
+
+    const recentHistory = history.slice(-20)
+    const chatMessages = recentHistory.map(m => ({
+      role: m.role === 'ai' ? 'assistant' : 'user',
+      content: m.content
+    }))
+    chatMessages.push({ role: 'user', content: normalizedContent })
+
+    let aiContent
+    try {
+      aiContent = await aiService.chat(chatMessages, {
+        system: AI_SYSTEM_PROMPT,
+        max_tokens: 4096
+      })
+    } catch (e) {
+      aiContent = `抱歉，AI 回复生成失败：${e.message}，请稍后重试。`
+    }
+
+    await pool.execute(
+      'DELETE FROM dialog_messages WHERE dialog_id = ? AND (timestamp > ? OR (role = "ai" AND parent_id = ?))',
+      [dialogId, message.timestamp, messageId]
+    )
+
+    const aiMsgId = generateId()
+    await pool.execute(
+      `INSERT INTO dialog_messages (id, dialog_id, user_id, content, role, parent_id, version)
+       VALUES (?, ?, ?, ?, "ai", ?, 1)`,
+      [aiMsgId, dialogId, userId, aiContent, messageId]
+    )
+
+    await pool.execute(
+      'UPDATE dialogs SET updated_at = NOW(), last_message_at = NOW() WHERE id = ? AND user_id = ?',
+      [dialogId, userId]
+    )
+
+    const [[updatedUserMessage]] = await pool.execute(
+      'SELECT * FROM dialog_messages WHERE id = ? AND dialog_id = ? AND user_id = ?',
+      [messageId, dialogId, userId]
+    )
+    const [[updatedAiMessage]] = await pool.execute(
+      'SELECT * FROM dialog_messages WHERE id = ? AND dialog_id = ? AND user_id = ?',
+      [aiMsgId, dialogId, userId]
+    )
+
+    return successResponse({
+      user_message: updatedUserMessage,
+      ai_message: updatedAiMessage
+    }, '编辑成功')
   }
 
   /**
