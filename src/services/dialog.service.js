@@ -2,7 +2,150 @@ const { pool } = require('../config/database')
 const { generateId, groupDialogsByDate, successResponse, errorResponse } = require('../utils/helpers')
 const aiService = require('./ai.service')
 
-const AI_SYSTEM_PROMPT = '你是 Claude，一个由 Anthropic 开发的 AI 助手。你善于分析问题、提供详细解答，并始终以友好、专业的方式与用户交流。'
+const AI_SYSTEM_PROMPT = `你是 Claude，一个由 Anthropic 开发的 AI 助手。你善于分析问题、提供详细解答，并始终以友好、专业的方式与用户交流。
+
+当用户请求创建网页、HTML 页面或网站时，请遵守以下规则：
+
+1. **输出完整HTML文档**：必须提供完整的、可运行的HTML代码，包含必要的<!DOCTYPE html>、<html>、<head>和<body>标签。
+2. **使用代码块**：将完整的HTML代码包裹在\`\`\`html\`\`\`代码块中。
+3. **包含基本结构**：确保HTML文档包含：
+   - <!DOCTYPE html>声明
+   - <html>标签
+   - <head>部分，包含<meta charset="UTF-8">和<meta name="viewport" content="width=device-width, initial-scale=1.0">
+   - <title>标签设置页面标题
+   - <body>标签包含所有可见内容
+4. **添加示例内容**：如果用户没有指定具体内容，请添加有意义的示例内容（如"你好，世界！"）。
+5. **包含基本样式**：添加一些基本的CSS样式使页面看起来美观。
+6. **确保可直接运行**：生成的HTML代码应该可以直接复制到.html文件中并在浏览器中打开运行。
+
+示例格式：
+\`\`\`html
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>页面标题</title>
+  <style>
+    /* 基本样式 */
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: sans-serif; background: #f0f2f5; }
+    /* 更多样式... */
+  </style>
+</head>
+<body>
+  <div>页面内容</div>
+</body>
+</html>
+\`\`\``
+
+/**
+ * 检测内容中是否包含可渲染的 HTML
+ * 返回提取的 HTML 内容，如果没有则返回 null
+ */
+const extractHtmlContent = (content) => {
+  if (!content) return null
+  
+  console.log('[SERVICE] extractHtmlContent called, content length:', content.length)
+  
+  // 1. 检查代码块中的 HTML (包括 ```html 或 ```htm)
+  const codeBlockRegex = /```\s*(?:html|htm)\s*\n([\s\S]*?)```/gi
+  let codeMatch
+  let bestHtml = ''
+  let bestLength = 0
+  
+  // 重置正则表达式 lastIndex
+  codeBlockRegex.lastIndex = 0
+  while ((codeMatch = codeBlockRegex.exec(content)) !== null) {
+    const html = codeMatch[1].trim()
+    if (html.length > bestLength) {
+      bestLength = html.length
+      bestHtml = html
+    }
+  }
+  
+  if (bestHtml && bestHtml.length > 20) {
+    console.log('[SERVICE] Extracted HTML from code block, length:', bestHtml.length)
+    return bestHtml
+  }
+  
+  // 2. 检查裸 HTML 文档
+  const htmlDocRegex = /<!DOCTYPE\s+html[\s\S]*?<\/html>|<html[\s\S]*?<\/html>/i
+  const htmlDocMatch = content.match(htmlDocRegex)
+  if (htmlDocMatch) {
+    const html = htmlDocMatch[0].trim()
+    if (html.length > 50) {
+      console.log('[SERVICE] Found complete HTML document, length:', html.length)
+      return html
+    }
+  }
+  
+  // 3. 检查 HTML 片段（包含常见标签）
+  const htmlTagsRegex = /<(?:div|span|p|h[1-6]|a|button|form|input|textarea|select|table|ul|ol|li|header|footer|nav|section|article|main|aside|img|video|audio|canvas|svg|path|rect|circle|ellipse|line|polyline|polygon|text|g)[^>]*>[\s\S]*?<\/[^>]+>/i
+  const htmlTagMatch = content.match(htmlTagsRegex)
+  if (htmlTagMatch) {
+    const html = htmlTagMatch[0].trim()
+    if (html.length > 30) {
+      console.log('[SERVICE] Found HTML fragment with tags, length:', html.length)
+      return html
+    }
+  }
+  
+  // 4. 检查是否有明显的 HTML 结构（包含样式或脚本）
+  const hasHtmlStructure = /<[^>]+>.*<\/[^>]+>|<style[\s\S]*?>[\s\S]*?<\/style>|<script[\s\S]*?>[\s\S]*?<\/script>/i.test(content)
+  if (hasHtmlStructure) {
+    // 尝试提取从第一个标签开始到最后一个标签结束的内容
+    const startIndex = content.indexOf('<')
+    const endIndex = content.lastIndexOf('>') + 1
+    if (endIndex > startIndex) {
+      const html = content.substring(startIndex, endIndex).trim()
+      if (html.length > 30) {
+        console.log('[SERVICE] Found HTML structure, length:', html.length)
+        return html
+      }
+    }
+  }
+  
+  // 5. 检查是否包含 CSS 样式内容（可能是内联样式或样式块）
+  const hasCssContent = /\{(?:[^{}]|\{[^{}]*\})*\}/.test(content) && (content.includes('font-family') || content.includes('color') || content.includes('background') || content.includes('margin') || content.includes('padding') || content.includes('width') || content.includes('height'))
+  if (hasCssContent) {
+    // 尝试提取从第一个 { 到最后一个 } 的内容作为 CSS
+    const styleStart = content.indexOf('{')
+    const styleEnd = content.lastIndexOf('}') + 1
+    if (styleEnd > styleStart) {
+      const styleContent = content.substring(styleStart, styleEnd).trim()
+      if (styleContent.length > 20) {
+        console.log('[SERVICE] Found CSS content, creating HTML wrapper')
+        // 创建包含样式的简单HTML
+        return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Preview</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      line-height: 1.6;
+      color: #333;
+      background: #fff;
+      padding: 20px;
+    }
+    ${styleContent}
+  </style>
+</head>
+<body>
+  <div>${content.substring(0, Math.min(200, content.length)).replace(/[<>]/g, '')}</div>
+</body>
+</html>`
+      }
+    }
+  }
+  
+  console.log('[SERVICE] No HTML content detected')
+  return null
+}
 
 // 制品模式专用系统提示词（强制使用 [QUESTION]/[CHOICE] 格式）
 const ARTIFACT_SYSTEM_PROMPTS = {
@@ -488,6 +631,10 @@ class DialogService {
 
     // 流式调用 AI
     let fullContent = ''
+    let state = 'normal' // 'normal' 或 'html_block'
+    let buffer = '' // 当前状态下的累积缓冲区
+    let hasSentHtmlRender = false
+
     try {
       console.log('[SERVICE] calling aiService.chatStream...')
       const stream = aiService.chatStream(chatMessages, {
@@ -501,12 +648,225 @@ class DialogService {
         aiChunkCount++
         fullContent += delta
         console.log(`[SERVICE] AI chunk #${aiChunkCount}:`, JSON.stringify(delta).substring(0, 50))
-        yield { type: 'chunk', text: delta }
+
+        // 将 delta 追加到缓冲区
+        buffer += delta
+
+        // 处理缓冲区中的内容，可能产生多个事件
+        while (true) {
+          if (state === 'normal') {
+            // 检测是否出现 ```html 或 ```htm 代码块开始（允许跨行）
+            // 匹配模式：``` 后跟任意空白（包括换行），然后 html 或 htm
+            const startMatch = buffer.match(/```[\s]*?(?:html|htm)\b/)
+            if (startMatch) {
+              const startIdx = buffer.indexOf(startMatch[0])
+              // 发送开始标记之前的普通文本
+              const beforeHtml = buffer.substring(0, startIdx)
+              if (beforeHtml) {
+                yield { type: 'chunk', text: beforeHtml }
+              }
+              // 找到开始标记后的第一个非空白字符
+              const afterStart = buffer.substring(startIdx + startMatch[0].length)
+              let skipChars = 0
+              // 跳过可能的空白字符和换行符
+              while (skipChars < afterStart.length && (afterStart[skipChars] === ' ' || afterStart[skipChars] === '\t' || afterStart[skipChars] === '\n' || afterStart[skipChars] === '\r')) {
+                skipChars++
+              }
+              // 剩余部分包含开始标记之后的内容（去掉开始标记和空白）
+              const remaining = afterStart.substring(skipChars)
+              // 切换到 html_block 状态
+              state = 'html_block'
+              buffer = remaining
+              console.log('[SERVICE] Switched to html_block state, buffer length:', buffer.length)
+              // 继续循环，可能立即检测到结束标记
+              continue
+            }
+            
+            // 检测是否出现裸 HTML 文档开始（<!DOCTYPE html>、<html>、<body>、<head>等）
+            // 但为了避免误匹配，我们只在这些标记出现在行首或前面只有空白时进行匹配
+            const htmlDocStartMatch = buffer.match(/(?:^|\n)\s*(?:<!DOCTYPE\s+html|<html\b|<body\b|<head\b)/i)
+            if (htmlDocStartMatch && !artifactType) {
+              const startIdx = buffer.indexOf(htmlDocStartMatch[0])
+              // 发送开始标记之前的普通文本
+              const beforeHtml = buffer.substring(0, startIdx)
+              if (beforeHtml) {
+                yield { type: 'chunk', text: beforeHtml }
+              }
+              // 切换到 html_block 状态，保留 HTML 开始标记
+              state = 'html_block'
+              buffer = buffer.substring(startIdx)
+              console.log('[SERVICE] Switched to html_block state (naked HTML), buffer length:', buffer.length)
+              continue
+            }
+            
+            // 检查是否可能正在构建 HTML 开始标记（以 ``` 开头）
+            // 我们需要处理 ``` 和 html/htm 可能在不同 chunk 的情况
+            const backtickMatch = buffer.match(/```/)
+            if (backtickMatch) {
+              const backtickIdx = buffer.indexOf('```')
+              // 检查 ``` 之后的内容是否可能成为 html/htm 标记
+              const afterBackticks = buffer.substring(backtickIdx + 3) // 3个反引号
+              
+              // 情况1：``` 后面直接是空白，可能下一行是 html
+              if (afterBackticks.length === 0 || /^[\s\r\n]*$/.test(afterBackticks)) {
+                // 可能还在构建开始标记，等待更多数据
+                console.log('[SERVICE] Found ``` followed by whitespace, waiting for language tag')
+                break
+              }
+              
+              // 情况2：``` 后面有一些字符，检查是否可能是 html/htm 的一部分
+              // 例如：```h, ```ht, ```htm 等
+              const partialMatch = afterBackticks.match(/^[\s]*?(?:h|ht|htm|html)?$/)
+              if (partialMatch) {
+                // 可能还在构建开始标记，等待更多数据
+                console.log('[SERVICE] Found ``` with partial HTML tag:', afterBackticks.substring(0, 10))
+                break
+              }
+              
+              // 情况3：``` 后面有明显不是 html/htm 的内容
+              // 例如：```js, ```python, ```text 等
+              // 检查是否已经有一个完整的非html语言标记
+              const otherLangMatch = afterBackticks.match(/^[\s]*?([a-zA-Z][a-zA-Z0-9]*)\b/)
+              if (otherLangMatch && !/^(?:h|ht|htm|html)$/i.test(otherLangMatch[1].trim())) {
+                // 这是其他语言的代码块
+                console.log('[SERVICE] Found ``` with other language:', otherLangMatch[1])
+                // 发送整个buffer作为普通文本
+                if (buffer) {
+                  yield { type: 'chunk', text: buffer }
+                  buffer = ''
+                }
+                break
+              }
+              
+              // 情况4：``` 后面有内容但不是有效的语言标识符
+              // 可能是格式错误的代码块或只是普通文本中的 ```
+              // 检查是否有换行符，如果有，可能是一个没有语言标识符的代码块
+              const hasNewlineAfter = afterBackticks.includes('\n')
+              if (hasNewlineAfter) {
+                // 可能是一个没有语言标识符的代码块，发送整个buffer
+                if (buffer) {
+                  yield { type: 'chunk', text: buffer }
+                  buffer = ''
+                }
+                break
+              }
+              
+              // 其他情况：等待更多数据
+              console.log('[SERVICE] Found ``` but unclear what follows:', afterBackticks.substring(0, 20))
+              break
+            }
+            
+            // 没有检测到 HTML 开始标记，发送整个缓冲区作为普通文本
+            if (buffer) {
+              yield { type: 'chunk', text: buffer }
+              buffer = ''
+            }
+            break // 退出 while 循环，等待下一个 delta
+          } else if (state === 'html_block') {
+            // 检测是否出现结束标记 ```
+            const endMatch = buffer.match(/```/)
+            if (endMatch) {
+              const endIdx = buffer.indexOf(endMatch[0])
+              // 提取结束标记之前的 HTML 内容
+              const htmlContent = buffer.substring(0, endIdx).trim()
+              // 按行拆分 HTML 内容并发送块
+              if (!artifactType && htmlContent) {
+                const lines = htmlContent.split('\n')
+                for (const line of lines) {
+                  const trimmedLine = line.trim()
+                  if (trimmedLine.length > 0) {
+                    console.log('[SERVICE] Sending HTML line (before ```):', trimmedLine.substring(0, 100))
+                    yield { type: 'render', html: trimmedLine, artifactType: null, chunk: true }
+                    hasSentHtmlRender = true
+                  }
+                }
+              } else if (artifactType) {
+                console.log('[SERVICE] HTML content detected in artifact mode (type:', artifactType, '), skipping render events')
+              }
+              // 剩余部分为结束标记之后的内容
+              const remaining = buffer.substring(endIdx + endMatch[0].length)
+              // 切换回 normal 状态
+              state = 'normal'
+              buffer = remaining
+              console.log('[SERVICE] Switched back to normal state after HTML block, remaining buffer length:', buffer.length)
+              // 继续循环，可能剩余内容中包含另一个开始标记
+              continue
+            }
+            
+            // 对于裸 HTML 文档，检测 </html> 结束标签
+            // 注意：这里假设 HTML 文档是完整的，以 </html> 结束
+            const htmlEndMatch = buffer.match(/<\/html>/i)
+            if (htmlEndMatch && !artifactType) {
+              const endIdx = buffer.indexOf(htmlEndMatch[0])
+              // 提取结束标记之前的 HTML 内容（包含 </html>）
+              const htmlContent = buffer.substring(0, endIdx + htmlEndMatch[0].length).trim()
+              // 按行拆分 HTML 内容并发送块
+              const lines = htmlContent.split('\n')
+              for (const line of lines) {
+                const trimmedLine = line.trim()
+                if (trimmedLine.length > 0) {
+                  console.log('[SERVICE] Sending HTML line (including </html>):', trimmedLine.substring(0, 100))
+                  yield { type: 'render', html: trimmedLine, artifactType: null, chunk: true }
+                  hasSentHtmlRender = true
+                }
+              }
+              // 剩余部分为结束标记之后的内容
+              const remaining = buffer.substring(endIdx + htmlEndMatch[0].length)
+              // 切换回 normal 状态
+              state = 'normal'
+              buffer = remaining
+              console.log('[SERVICE] Switched back to normal state after naked HTML, remaining buffer length:', buffer.length)
+              // 继续循环，可能剩余内容中包含另一个开始标记
+              continue
+            }
+            
+            // 尝试按行拆分 HTML 内容并流式发送
+            // 查找换行符位置
+            const newlineIndex = buffer.indexOf('\n')
+            if (newlineIndex !== -1 && !artifactType) {
+              // 提取该行（不包括换行符）
+              const line = buffer.substring(0, newlineIndex).trim()
+              if (line.length > 0) {
+                // 发送该行作为渲染事件（添加 chunk 标记）
+                console.log('[SERVICE] Sending HTML line:', line.substring(0, 100))
+                yield { type: 'render', html: line, artifactType: null, chunk: true }
+                hasSentHtmlRender = true
+              }
+              // 从缓冲区中移除该行和换行符
+              buffer = buffer.substring(newlineIndex + 1)
+              // 继续循环，可能还有更多行
+              continue
+            }
+            
+            // 没有检测到结束标记，保持 html_block 状态，等待更多数据
+            // 在 html_block 状态下，我们不发送任何 chunk，只累积内容
+            break // 退出 while 循环，等待下一个 delta
+          }
+        }
       }
 
       console.log(`[SERVICE] AI stream complete, ${aiChunkCount} chunks, total ${fullContent.length} chars`)
       if (!fullContent) {
         console.warn('[SERVICE] WARNING: AI returned empty content!')
+      }
+
+      // 流结束后，处理可能剩余的内容
+      if (state === 'normal' && buffer) {
+        yield { type: 'chunk', text: buffer }
+        buffer = ''
+      }
+      // 如果流结束时仍处于 html_block 状态，说明没有找到结束标记，可能格式错误
+      if (state === 'html_block') {
+        // 如果是代码块模式但没有结束标记，将 buffer 作为普通文本发送（加上开始标记）
+        console.warn('[SERVICE] WARNING: HTML block not closed, sending as plain text')
+        // 检查是否以代码块开始（根据之前的检测逻辑）
+        if (fullContent.includes('```html') || fullContent.includes('```htm')) {
+          yield { type: 'chunk', text: '```html\n' + buffer }
+        } else {
+          // 裸HTML文档，直接发送
+          yield { type: 'chunk', text: buffer }
+        }
+        buffer = ''
       }
     } catch (e) {
       console.error('[SERVICE] AI service error:', e.message || e)
@@ -514,7 +874,7 @@ class DialogService {
       yield { type: 'chunk', text: fullContent }
     }
 
-    // 保存完整回复到数据库
+    // 保存完整回复到数据库（fullContent 包含所有原始内容，包括 HTML 代码块）
     const aiMsgId = generateId()
     await pool.execute(
       `INSERT INTO dialog_messages (id, dialog_id, user_id, content, role, parent_id)
@@ -522,6 +882,25 @@ class DialogService {
       [aiMsgId, dialogId, userId, fullContent, userMsgId]
     )
     console.log('[SERVICE] aiMessage saved:', aiMsgId, 'content length:', fullContent.length)
+
+  //此处调试不可删除
+  console.log('[SERVICE] artifactType:', artifactType)
+  console.log('[SERVICE] fullContent:', fullContent)
+  // 检测并发送 HTML 渲染事件（仅限非制品模式）
+  // 注意：如果已经在流式处理中发送了渲染事件，这里不再重复发送
+  // 但为了兼容旧逻辑，我们仍然调用 extractHtmlContent 进行检测
+  const htmlContent = extractHtmlContent(fullContent)
+  if (htmlContent && !artifactType && !hasSentHtmlRender) {
+    console.log('[SERVICE] HTML content detected in non-artifact mode (post-stream), sending render event')
+    console.log('[SERVICE] Render event html length:', htmlContent.length)
+    console.log('[SERVICE] Render event html sample:', htmlContent.substring(0, 200))
+    yield { type: 'render', html: htmlContent, artifactType: null }
+  } else if (htmlContent && !hasSentHtmlRender) {
+    console.log('[SERVICE] HTML content detected in artifact mode (type:', artifactType, '), skipping render event')
+  } else {
+    console.log('[SERVICE] No HTML content detected, fullContent length:', fullContent.length)
+    console.log('[SERVICE] fullContent sample:', fullContent.substring(0, 300))
+  }
 
     yield { type: 'done', id: aiMsgId }
   }
@@ -606,6 +985,10 @@ class DialogService {
 
   /**
    * 重新生成消息
+   * 无论用户消息还是AI消息，效果完全一样：重新生成当前轮次的AI回答
+   * 1. 替换当前气泡内的AI回答
+   * 2. 当前轮次之后的所有消息自动归档到历史记录（不再显示在主对话流）
+   * 3. 创建新的对话分支
    */
   async regenerateMessage(dialogId, messageId, userId) {
     const [[msg]] = await pool.execute(
@@ -614,10 +997,46 @@ class DialogService {
     )
     if (!msg) return errorResponse('消息不存在', 404)
 
-    // 获取对话历史（到此消息为止）
+    // 确定父用户消息（当前轮次的用户消息）
+    let parentUserMessage = msg
+    if (msg.role === 'ai') {
+      // 如果是AI消息，找到其父用户消息
+      const [[parentMsg]] = await pool.execute(
+        'SELECT * FROM dialog_messages WHERE id = ? AND dialog_id = ?',
+        [msg.parent_id, dialogId]
+      )
+      if (!parentMsg) return errorResponse('父用户消息不存在', 404)
+      parentUserMessage = parentMsg
+    }
+
+    // 删除当前轮次之后的非分支消息（归档到历史记录）
+    // 保留所有父消息ID为 parentUserMessage.id 的AI分支
+    // 先获取所有需要保留的分支消息ID
+    const [branchMessages] = await pool.execute(
+      'SELECT id FROM dialog_messages WHERE dialog_id = ? AND parent_id = ?',
+      [dialogId, parentUserMessage.id]
+    )
+    const branchIds = branchMessages.map(m => m.id)
+    
+    // 如果没有分支消息，直接删除所有后续消息
+    if (branchIds.length === 0) {
+      await pool.execute(
+        'DELETE FROM dialog_messages WHERE dialog_id = ? AND timestamp > ?',
+        [dialogId, parentUserMessage.timestamp]
+      )
+    } else {
+      // 构建IN语句占位符
+      const placeholders = branchIds.map(() => '?').join(',')
+      await pool.execute(
+        `DELETE FROM dialog_messages WHERE dialog_id = ? AND timestamp > ? AND id NOT IN (${placeholders})`,
+        [dialogId, parentUserMessage.timestamp, ...branchIds]
+      )
+    }
+
+    // 获取对话历史（到父用户消息为止）
     const [history] = await pool.execute(
       'SELECT role, content FROM dialog_messages WHERE dialog_id = ? AND timestamp < ? ORDER BY timestamp ASC',
-      [dialogId, msg.timestamp]
+      [dialogId, parentUserMessage.timestamp]
     )
 
     const recentHistory = history.slice(-20)
@@ -626,16 +1045,8 @@ class DialogService {
       content: m.content
     }))
 
-    // 如果原始消息是 AI 的，且有其 parent_id 对应的用户消息，追加到上下文
-    if (msg.role === 'ai' && msg.parent_id) {
-      const [[parentMsg]] = await pool.execute(
-        'SELECT content FROM dialog_messages WHERE id = ?',
-        [msg.parent_id]
-      )
-      if (parentMsg) {
-        chatMessages.push({ role: 'user', content: parentMsg.content })
-      }
-    }
+    // 将父用户消息的内容追加到上下文
+    chatMessages.push({ role: 'user', content: parentUserMessage.content })
 
     // 调用 AI 重新生成
     let aiContent
@@ -649,13 +1060,19 @@ class DialogService {
       aiContent = `抱歉，AI 回复重新生成失败：${e.message}，请稍后重试。`
     }
 
-    const newVersion = msg.version + 1
+    // 计算新版本号：查找该父用户消息现有的AI回复最大版本号
+    const [existingAiMessages] = await pool.execute(
+      'SELECT version FROM dialog_messages WHERE parent_id = ? ORDER BY version DESC LIMIT 1',
+      [parentUserMessage.id]
+    )
+    const newVersion = existingAiMessages.length > 0 ? existingAiMessages[0].version + 1 : 1
+
     const newMsgId = generateId()
 
     await pool.execute(
       `INSERT INTO dialog_messages (id, dialog_id, user_id, content, role, parent_id, version)
        VALUES (?, ?, ?, ?, "ai", ?, ?)`,
-      [newMsgId, dialogId, userId, aiContent, msg.parent_id, newVersion]
+      [newMsgId, dialogId, userId, aiContent, parentUserMessage.id, newVersion]
     )
 
     return successResponse({ id: newMsgId, content: aiContent, role: 'ai', version: newVersion })

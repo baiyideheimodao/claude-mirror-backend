@@ -101,6 +101,9 @@ router.post('/:dialogId/messages/stream', dialogIdParam, sendMessageValidation, 
         console.log(`${TAG} DONE: ${chunkCount} chunks, ${fullContent.length} chars`)
         break
       }
+      if (chunk.type === 'render'){
+        sendEvent('render',{html:chunk.html})
+      }
       if (chunk.text) {
         fullContent += chunk.text
         sendEvent('chunk', { text: chunk.text })
