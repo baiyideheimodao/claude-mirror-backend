@@ -3,9 +3,10 @@ const path = require('path')
 const { v4: uuidv4 } = require('uuid')
 const { pool } = require('../config/database')
 const { generateId, successResponse, errorResponse } = require('../utils/helpers')
-require('dotenv').config()
+require('dotenv').config({ path: path.resolve(__dirname, '../../.env') })
 
-const UPLOAD_DIR = process.env.UPLOAD_DIR || './uploads'
+// 使用 __dirname 作为基准路径来确保路径正确解析
+const UPLOAD_DIR = path.resolve(__dirname, '../../', process.env.UPLOAD_DIR || 'uploads')
 const MAX_SIZE = parseInt(process.env.MAX_FILE_SIZE) || 10 * 1024 * 1024
 
 // Multer配置
