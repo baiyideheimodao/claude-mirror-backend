@@ -528,6 +528,18 @@ class DialogService {
       'INSERT INTO dialog_messages (id, dialog_id, user_id, content, role, status) VALUES (?, ?, ?, ?, "user", "sent")',
       [userMsgId, dialogId, userId, content]
     )
+    
+    // 关联文件与消息（如果存在文件）
+    if (files && files.length > 0) {
+      for (const fileId of files) {
+        await pool.execute(
+          'UPDATE files SET dialog_id = ? WHERE id = ? AND user_id = ?',
+          [dialogId, fileId, userId]
+        )
+        console.log(`[SERVICE] sendMessage: 关联文件 ${fileId} 到消息 ${userMsgId}`)
+      }
+    }
+    
     // 更新对话时间
     await pool.execute(
       'UPDATE dialogs SET last_message_at = NOW(), updated_at = NOW() WHERE id = ?',
@@ -542,10 +554,58 @@ class DialogService {
 
     // 构建消息列表（限制最近 20 条避免 token 过多）
     const recentHistory = history.slice(-20)
-    const chatMessages = recentHistory.map(m => ({
-      role: m.role === 'ai' ? 'assistant' : 'user',
-      content: m.content
-    }))
+    const chatMessages = []
+    
+    // 处理消息历史，为当前用户消息添加图片
+    for (const historyMsg of recentHistory) {
+      // 如果这是当前用户消息且包含文件，构建multimodal消息
+      if (historyMsg.role === 'user' && files && files.length > 0) {
+        const messageContent = [{
+          type: 'text',
+          text: historyMsg.content
+        }]
+        
+        // 获取并添加图片
+        for (const fileId of files) {
+          try {
+            const [fileRows] = await pool.execute(
+              'SELECT file_path, file_type FROM files WHERE id = ? AND user_id = ?',
+              [fileId, userId]
+            )
+            
+            if (fileRows.length > 0) {
+              const file = fileRows[0]
+              if (file.file_type === 'image') {
+                const base64Image = await aiService.imageToBase64(file.file_path)
+                
+                messageContent.push({
+                  type: 'image_url',
+                  image_url: {
+                    url: base64Image
+                  }
+                })
+                console.log(`[SERVICE] sendMessage: 添加图片到消息: ${fileId}`)
+              }
+            }
+          } catch (error) {
+            console.error(`[SERVICE] sendMessage: 处理文件 ${fileId} 失败:`, error.message)
+          }
+        }
+        
+        chatMessages.push({
+          role: 'user',
+          content: messageContent
+        })
+      } else {
+        // 其他消息保持原样
+        chatMessages.push({
+          role: historyMsg.role === 'ai' ? 'assistant' : 'user',
+          content: historyMsg.content
+        })
+      }
+    }
+    
+    console.log(`[SERVICE] sendMessage: 聊天消息数量: ${chatMessages.length}`)
 
     // 选择系统提示词：如果有 artifactType，使用制品专用提示词
     let systemPrompt = AI_SYSTEM_PROMPT
@@ -606,22 +666,132 @@ class DialogService {
     )
     console.log('[SERVICE] userMsg saved:', userMsgId)
 
+    // 关联文件与消息（如果存在文件）
+    if (files && files.length > 0) {
+      for (const fileId of files) {
+        await pool.execute(
+          'UPDATE files SET dialog_id = ? WHERE id = ? AND user_id = ?',
+          [dialogId, fileId, userId]
+        )
+        console.log(`[SERVICE] 关联文件 ${fileId} 到消息 ${userMsgId}`)
+      }
+    }
+
     await pool.execute(
       'UPDATE dialogs SET last_message_at = NOW(), updated_at = NOW() WHERE id = ?',
       [dialogId]
     )
 
-    // 获取对话历史
+    // 获取对话历史（包含当前消息）
     const [history] = await pool.execute(
       'SELECT role, content FROM dialog_messages WHERE dialog_id = ? ORDER BY timestamp ASC',
       [dialogId]
     )
     const recentHistory = history.slice(-20)
-    const chatMessages = recentHistory.map(m => ({
-      role: m.role === 'ai' ? 'assistant' : 'user',
-      content: m.content
-    }))
-    console.log('[SERVICE] history loaded, messages count:', chatMessages.length)
+    
+    // 构建聊天消息用于AI
+    const chatMessages = []
+    
+    // 添加历史消息
+    for (const historyMsg of recentHistory) {
+      // 如果这是当前用户消息，我们需要包含图片数据
+      if (historyMsg.role === 'user' && files && files.length > 0) {
+        // 对于当前消息，如果包含文件，构建multimodal消息
+        const messageContent = [{
+          type: 'text',
+          text: historyMsg.content
+        }]
+        
+        // 获取并添加图片
+        for (const fileId of files) {
+          try {
+            // 获取文件信息
+            const [fileRows] = await pool.execute(
+              'SELECT file_path, file_type FROM files WHERE id = ? AND user_id = ?',
+              [fileId, userId]
+            )
+            
+            if (fileRows.length > 0) {
+              const file = fileRows[0]
+              // 只处理图片文件
+              if (file.file_type === 'image') {
+                const aiService = require('./ai.service')
+                const base64Image = await aiService.imageToBase64(file.file_path)
+                
+                messageContent.push({
+                  type: 'image_url',
+                  image_url: {
+                    url: base64Image
+                  }
+                })
+                console.log(`[SERVICE] 添加图片到消息: ${fileId}`)
+              }
+            }
+          } catch (error) {
+            console.error(`[SERVICE] 处理文件 ${fileId} 失败:`, error.message)
+          }
+        }
+        
+        chatMessages.push({
+          role: 'user',
+          content: messageContent
+        })
+      } else {
+        // 其他消息保持原样
+        chatMessages.push({
+          role: historyMsg.role === 'ai' ? 'assistant' : 'user',
+          content: historyMsg.content
+        })
+      }
+    }
+    
+    // 如果当前消息是新的（不在历史中），添加到chatMessages末尾
+    // 注意：数据库查询可能已经包含了刚插入的消息，取决于服务器速度
+    const currentMessageInHistory = recentHistory.some(m => m.role === 'user' && m.content === content)
+    if (!currentMessageInHistory) {
+      // 这是新消息，按上述流程处理
+      const messageContent = [{
+        type: 'text',
+        text: content
+      }]
+      
+      // 获取并添加图片（与上面相同逻辑）
+      if (files && files.length > 0) {
+        for (const fileId of files) {
+          try {
+            const [fileRows] = await pool.execute(
+              'SELECT file_path, file_type FROM files WHERE id = ? AND user_id = ?',
+              [fileId, userId]
+            )
+            
+            if (fileRows.length > 0) {
+              const file = fileRows[0]
+              if (file.file_type === 'image') {
+                const aiService = require('./ai.service')
+                const base64Image = await aiService.imageToBase64(file.file_path)
+                
+                messageContent.push({
+                  type: 'image_url',
+                  image_url: {
+                    url: base64Image
+                  }
+                })
+                console.log(`[SERVICE] 添加图片到当前消息: ${fileId}`)
+              }
+            }
+          } catch (error) {
+            console.error(`[SERVICE] 处理当前消息文件 ${fileId} 失败:`, error.message)
+          }
+        }
+      }
+      
+      chatMessages.push({
+        role: 'user',
+        content: messageContent
+      })
+    }
+    
+    console.log('[SERVICE] 聊天消息准备完成，数量:', chatMessages.length)
 
     // 选择系统提示词
     let systemPrompt = AI_SYSTEM_PROMPT
@@ -1019,8 +1189,8 @@ class DialogService {
     if (msg.role === 'ai') {
       // 如果是AI消息，找到其父用户消息
       const [[parentMsg]] = await pool.execute(
-        'SELECT * FROM dialog_messages WHERE id = ? AND dialog_id = ?',
-        [msg.parent_id, dialogId]
+        'SELECT * FROM dialog_messages WHERE id = ? AND dialog_id = ? AND user_id = ?',
+        [msg.parent_id, dialogId, userId]
       )
       if (!parentMsg) return errorResponse('父用户消息不存在', 404)
       parentUserMessage = parentMsg
@@ -1094,22 +1264,43 @@ class DialogService {
       [newMsgId, dialogId, userId, aiContent, htmlPreview, parentUserMessage.id, newVersion]
     )
 
-    return successResponse({ id: newMsgId, content: aiContent, role: 'ai', version: newVersion })
+    return successResponse({ 
+      id: newMsgId, 
+      content: aiContent, 
+      role: 'ai', 
+      version: newVersion, 
+      parent_id: parentUserMessage.id,
+      timestamp: new Date().toISOString(),
+      status: 'sent'
+    })
   }
 
   /**
    * 获取消息分支版本
    */
   async getMessageBranches(dialogId, messageId, userId) {
-    const [parentMsg] = await pool.execute(
-      'SELECT id FROM dialog_messages WHERE id = ? AND dialog_id = ?',
+    // 首先验证用户是否拥有此对话
+    const [[dialog]] = await pool.execute(
+      'SELECT id FROM dialogs WHERE id = ? AND user_id = ?',
+      [dialogId, userId]
+    )
+    if (!dialog) return errorResponse('对话不存在或无权访问', 404)
+    
+    // 然后验证消息是否存在且属于该对话
+    const [[parentMsg]] = await pool.execute(
+      'SELECT id, role, parent_id FROM dialog_messages WHERE id = ? AND dialog_id = ?',
       [messageId, dialogId]
     )
-    if (parentMsg.length === 0) return errorResponse('消息不存在', 404)
+    if (!parentMsg) return errorResponse('消息不存在', 404)
+
+    // 对于AI消息，获取其父用户消息的分支
+    const targetMessageId = parentMsg.role === 'ai' && parentMsg.parent_id 
+      ? parentMsg.parent_id 
+      : messageId
 
     const [branches] = await pool.execute(
-      'SELECT id, content, role, version, timestamp, status FROM dialog_messages WHERE parent_id = ? ORDER BY version ASC',
-      [messageId]
+      'SELECT id, content, role, version, timestamp as created_at, status FROM dialog_messages WHERE parent_id = ? ORDER BY version ASC',
+      [targetMessageId]
     )
     return successResponse(branches)
   }
