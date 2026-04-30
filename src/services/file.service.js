@@ -72,13 +72,22 @@ class FileService {
       [fileId, userId, dialogId, file.originalname, file.path, fileType, file.size]
     )
 
+    // 对于图片文件，生成可访问的预览 URL
+    // file.path 格式为 ./uploads/filename.ext 或 uploads/filename.ext
+    let previewUrl = null
+    if (fileType === 'image') {
+      const filename = path.basename(file.path)
+      previewUrl = `/uploads/${filename}`
+    }
+    
     return successResponse({
       id: fileId,
       filename: file.originalname,
       file_path: file.path,
       file_type: fileType,
       size: file.size,
-      uploaded_at: new Date().toISOString()
+      uploaded_at: new Date().toISOString(),
+      preview_url: previewUrl
     }, '上传成功')
   }
 }

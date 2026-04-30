@@ -443,7 +443,7 @@ class DialogService {
   }
 
   /**
-   * 获取对话详情（含消息）
+   * 获取对话详情（含消息和文件）
    */
   async getDialogDetail(dialogId, userId) {
     const [dialogs] = await pool.execute(
@@ -456,6 +456,34 @@ class DialogService {
       'SELECT * FROM dialog_messages WHERE dialog_id = ? ORDER BY timestamp ASC',
       [dialogId]
     )
+
+    // 获取所有消息关联的文件
+    const [messageFiles] = await pool.execute(
+      'SELECT mf.*, f.filename, f.file_path, f.file_type, f.size, f.uploaded_at FROM message_files mf JOIN files f ON mf.file_id = f.id WHERE mf.dialog_id = ?',
+      [dialogId]
+    )
+
+    // 将文件信息按消息分组
+    const filesByMessage = {}
+    for (const file of messageFiles) {
+      if (!filesByMessage[file.message_id]) {
+        filesByMessage[file.message_id] = []
+      }
+      filesByMessage[file.message_id].push({
+        id: file.file_id,
+        filename: file.filename,
+        file_path: file.file_path,
+        file_type: file.file_type,
+        size: file.size,
+        uploaded_at: file.uploaded_at,
+        preview_url: file.file_type === 'image' ? `/uploads/${file.filename}` : null
+      })
+    }
+
+    // 将文件添加到对应的消息中
+    for (const msg of messages) {
+      msg.files = filesByMessage[msg.id] || []
+    }
 
     return successResponse({ ...dialogs[0], messages })
   }
@@ -536,7 +564,17 @@ class DialogService {
           'UPDATE files SET dialog_id = ? WHERE id = ? AND user_id = ?',
           [dialogId, fileId, userId]
         )
-        console.log(`[SERVICE] sendMessage: 关联文件 ${fileId} 到消息 ${userMsgId}`)
+        // 创建消息文件关联记录
+        try {
+          const messageFileId = generateId()
+          await pool.execute(
+            'INSERT INTO message_files (id, message_id, file_id, dialog_id) VALUES (?, ?, ?, ?)',
+            [messageFileId, userMsgId, fileId, dialogId]
+          )
+          console.log(`[SERVICE] sendMessage: 关联文件 ${fileId} 到消息 ${userMsgId}`)
+        } catch (error) {
+          console.error(`[SERVICE] sendMessage: 创建消息文件关联失败:`, error.message)
+        }
       }
     }
     
@@ -644,8 +682,31 @@ class DialogService {
       [aiMsgId, dialogId, userId, aiContent, htmlPreview, userMsgId]
     )
 
+    // 获取用户消息关联的文件
+    let userFiles = []
+    if (files && files.length > 0) {
+      for (const fileId of files) {
+        const [fileRows] = await pool.execute(
+          'SELECT id, filename, file_path, file_type, size, uploaded_at FROM files WHERE id = ? AND user_id = ?',
+          [fileId, userId]
+        )
+        if (fileRows.length > 0) {
+          const file = fileRows[0]
+          userFiles.push({
+            id: file.id,
+            filename: file.filename,
+            file_path: file.file_path,
+            file_type: file.file_type,
+            size: file.size,
+            uploaded_at: file.uploaded_at,
+            preview_url: file.file_type === 'image' ? `/uploads/${file.filename}` : null
+          })
+        }
+      }
+    }
+
     return successResponse({
-      user_message: { id: userMsgId, content, role: 'user' },
+      user_message: { id: userMsgId, content, role: 'user', files: userFiles },
       ai_message: { id: aiMsgId, content: aiContent, role: 'ai' }
     })
   }
@@ -673,7 +734,17 @@ class DialogService {
           'UPDATE files SET dialog_id = ? WHERE id = ? AND user_id = ?',
           [dialogId, fileId, userId]
         )
-        console.log(`[SERVICE] 关联文件 ${fileId} 到消息 ${userMsgId}`)
+        // 创建消息文件关联记录
+        try {
+          const messageFileId = generateId()
+          await pool.execute(
+            'INSERT INTO message_files (id, message_id, file_id, dialog_id) VALUES (?, ?, ?, ?)',
+            [messageFileId, userMsgId, fileId, dialogId]
+          )
+          console.log(`[SERVICE] 关联文件 ${fileId} 到消息 ${userMsgId}`)
+        } catch (error) {
+          console.error(`[SERVICE] 创建消息文件关联失败:`, error.message)
+        }
       }
     }
 
