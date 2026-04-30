@@ -575,10 +575,13 @@ class DialogService {
     }
 
     const aiMsgId = generateId()
+    // 提取 HTML 预览内容
+    const htmlPreview = extractHtmlContent(aiContent)
+    
     await pool.execute(
-      `INSERT INTO dialog_messages (id, dialog_id, user_id, content, role, parent_id)
-       VALUES (?, ?, ?, ?, "ai", ?)`,
-      [aiMsgId, dialogId, userId, aiContent, userMsgId]
+      `INSERT INTO dialog_messages (id, dialog_id, user_id, content, html_preview, role, parent_id)
+       VALUES (?, ?, ?, ?, ?, "ai", ?)`,
+      [aiMsgId, dialogId, userId, aiContent, htmlPreview, userMsgId]
     )
 
     return successResponse({
@@ -685,8 +688,11 @@ class DialogService {
             // 检测是否出现裸 HTML 文档开始（<!DOCTYPE html>、<html>、<body>、<head>等）
             // 但为了避免误匹配，我们只在这些标记出现在行首或前面只有空白时进行匹配
             const htmlDocStartMatch = buffer.match(/(?:^|\n)\s*(?:<!DOCTYPE\s+html|<html\b|<body\b|<head\b)/i)
-            if (htmlDocStartMatch && !artifactType) {
-              const startIdx = buffer.indexOf(htmlDocStartMatch[0])
+            // 也检测更常见的HTML标签开头
+            const htmlTagStartMatch = buffer.match(/(?:^|\n)\s*(?:<(?:div|span|p|h[1-6]|a|button|form|input|textarea|select|table|ul|ol|li|header|footer|nav|section|article|main|aside|img|video|audio|canvas|svg)\b)/i)
+            if ((htmlDocStartMatch || htmlTagStartMatch) && !artifactType) {
+              const match = htmlDocStartMatch || htmlTagStartMatch
+              const startIdx = buffer.indexOf(match[0])
               // 发送开始标记之前的普通文本
               const beforeHtml = buffer.substring(0, startIdx)
               if (beforeHtml) {
@@ -768,7 +774,7 @@ class DialogService {
             if (endMatch) {
               const endIdx = buffer.indexOf(endMatch[0])
               // 提取结束标记之前的 HTML 内容
-              const htmlContent = buffer.substring(0, endIdx).trim()
+              const htmlContent = buffer.substring(0, endIdx)
               // 按行拆分 HTML 内容并发送块
               if (!artifactType && htmlContent) {
                 const lines = htmlContent.split('\n')
@@ -799,7 +805,7 @@ class DialogService {
             if (htmlEndMatch && !artifactType) {
               const endIdx = buffer.indexOf(htmlEndMatch[0])
               // 提取结束标记之前的 HTML 内容（包含 </html>）
-              const htmlContent = buffer.substring(0, endIdx + htmlEndMatch[0].length).trim()
+              const htmlContent = buffer.substring(0, endIdx + htmlEndMatch[0].length)
               // 按行拆分 HTML 内容并发送块
               const lines = htmlContent.split('\n')
               for (const line of lines) {
@@ -825,11 +831,14 @@ class DialogService {
             const newlineIndex = buffer.indexOf('\n')
             if (newlineIndex !== -1 && !artifactType) {
               // 提取该行（不包括换行符）
-              const line = buffer.substring(0, newlineIndex).trim()
-              if (line.length > 0) {
+              const line = buffer.substring(0, newlineIndex)
+              // 对于HTML内容，我们不能随意trim，因为空格可能是有意义的
+              // 但可以移除行首和行尾的空白，保留中间的
+              const trimmedLine = line.trim()
+              if (trimmedLine.length > 0) {
                 // 发送该行作为渲染事件（添加 chunk 标记）
-                console.log('[SERVICE] Sending HTML line:', line.substring(0, 100))
-                yield { type: 'render', html: line, artifactType: null, chunk: true }
+                console.log('[SERVICE] Sending HTML line:', trimmedLine.substring(0, 100))
+                yield { type: 'render', html: trimmedLine, artifactType: null, chunk: true }
                 hasSentHtmlRender = true
               }
               // 从缓冲区中移除该行和换行符
@@ -876,12 +885,15 @@ class DialogService {
 
     // 保存完整回复到数据库（fullContent 包含所有原始内容，包括 HTML 代码块）
     const aiMsgId = generateId()
+    // 提取 HTML 预览内容
+    const htmlPreview = extractHtmlContent(fullContent)
+    
     await pool.execute(
-      `INSERT INTO dialog_messages (id, dialog_id, user_id, content, role, parent_id)
-       VALUES (?, ?, ?, ?, "ai", ?)`,
-      [aiMsgId, dialogId, userId, fullContent, userMsgId]
+      `INSERT INTO dialog_messages (id, dialog_id, user_id, content, html_preview, role, parent_id)
+       VALUES (?, ?, ?, ?, ?, "ai", ?)`,
+      [aiMsgId, dialogId, userId, fullContent, htmlPreview, userMsgId]
     )
-    console.log('[SERVICE] aiMessage saved:', aiMsgId, 'content length:', fullContent.length)
+    console.log('[SERVICE] aiMessage saved:', aiMsgId, 'content length:', fullContent.length, 'html_preview length:', htmlPreview ? htmlPreview.length : 0)
 
   //此处调试不可删除
   console.log('[SERVICE] artifactType:', artifactType)
@@ -894,7 +906,9 @@ class DialogService {
     console.log('[SERVICE] HTML content detected in non-artifact mode (post-stream), sending render event')
     console.log('[SERVICE] Render event html length:', htmlContent.length)
     console.log('[SERVICE] Render event html sample:', htmlContent.substring(0, 200))
-    yield { type: 'render', html: htmlContent, artifactType: null }
+    // 确保在 done 事件之前发送 render 事件
+    yield { type: 'render', html: htmlContent, artifactType: null, chunk: false }
+    hasSentHtmlRender = true
   } else if (htmlContent && !hasSentHtmlRender) {
     console.log('[SERVICE] HTML content detected in artifact mode (type:', artifactType, '), skipping render event')
   } else {
@@ -902,7 +916,7 @@ class DialogService {
     console.log('[SERVICE] fullContent sample:', fullContent.substring(0, 300))
   }
 
-    yield { type: 'done', id: aiMsgId }
+  yield { type: 'done', id: aiMsgId }
   }
 
   /**
@@ -957,10 +971,13 @@ class DialogService {
     )
 
     const aiMsgId = generateId()
+    // 提取 HTML 预览内容
+    const htmlPreview = extractHtmlContent(aiContent)
+    
     await pool.execute(
-      `INSERT INTO dialog_messages (id, dialog_id, user_id, content, role, parent_id, version)
-       VALUES (?, ?, ?, ?, "ai", ?, 1)`,
-      [aiMsgId, dialogId, userId, aiContent, messageId]
+      `INSERT INTO dialog_messages (id, dialog_id, user_id, content, html_preview, role, parent_id, version)
+       VALUES (?, ?, ?, ?, ?, "ai", ?, 1)`,
+      [aiMsgId, dialogId, userId, aiContent, htmlPreview, messageId]
     )
 
     await pool.execute(
@@ -1068,11 +1085,13 @@ class DialogService {
     const newVersion = existingAiMessages.length > 0 ? existingAiMessages[0].version + 1 : 1
 
     const newMsgId = generateId()
-
+    // 提取 HTML 预览内容
+    const htmlPreview = extractHtmlContent(aiContent)
+    
     await pool.execute(
-      `INSERT INTO dialog_messages (id, dialog_id, user_id, content, role, parent_id, version)
-       VALUES (?, ?, ?, ?, "ai", ?, ?)`,
-      [newMsgId, dialogId, userId, aiContent, parentUserMessage.id, newVersion]
+      `INSERT INTO dialog_messages (id, dialog_id, user_id, content, html_preview, role, parent_id, version)
+       VALUES (?, ?, ?, ?, ?, "ai", ?, ?)`,
+      [newMsgId, dialogId, userId, aiContent, htmlPreview, parentUserMessage.id, newVersion]
     )
 
     return successResponse({ id: newMsgId, content: aiContent, role: 'ai', version: newVersion })
