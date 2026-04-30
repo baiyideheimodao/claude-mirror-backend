@@ -469,6 +469,8 @@ class DialogService {
       if (!filesByMessage[file.message_id]) {
         filesByMessage[file.message_id] = []
       }
+      // 从 file_path 中提取实际存储的文件名
+      const storedFilename = file.file_path.split(/[/\\]/).pop()
       filesByMessage[file.message_id].push({
         id: file.file_id,
         filename: file.filename,
@@ -476,7 +478,7 @@ class DialogService {
         file_type: file.file_type,
         size: file.size,
         uploaded_at: file.uploaded_at,
-        preview_url: file.file_type === 'image' ? `/uploads/${file.filename}` : null
+        preview_url: file.file_type === 'image' ? `/uploads/${storedFilename}` : null
       })
     }
 
@@ -692,6 +694,8 @@ class DialogService {
         )
         if (fileRows.length > 0) {
           const file = fileRows[0]
+          // 从 file_path 中提取实际存储的文件名
+          const storedFilename = file.file_path.split(/[/\\]/).pop()
           userFiles.push({
             id: file.id,
             filename: file.filename,
@@ -699,7 +703,7 @@ class DialogService {
             file_type: file.file_type,
             size: file.size,
             uploaded_at: file.uploaded_at,
-            preview_url: file.file_type === 'image' ? `/uploads/${file.filename}` : null
+            preview_url: file.file_type === 'image' ? `/uploads/${storedFilename}` : null
           })
         }
       }
