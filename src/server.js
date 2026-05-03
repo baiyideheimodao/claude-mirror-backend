@@ -28,6 +28,7 @@ app.use('/api/v1/agent', require('./routes/agent.routes'))
 app.use('/api/v1/models', require('./routes/model.routes'))
 app.use('/api/v1/projects', require('./routes/project.routes'))
 app.use('/api/v1/admin', require('./routes/admin.routes'))
+app.use('/api/v1/subscription', require('./routes/subscription.routes'))
 
 // ========== 健康检查 ==========
 app.get('/health', (_req, res) => {
